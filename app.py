@@ -114,10 +114,10 @@ if api_key:
                     contents_payload.insert(0, prompt)
 
                     # Gemini API 呼び出し
-                    response = client.models.generate_content(
-                        model='gemini-2.5-flash',
-                        contents=contents_payload
-                    )
+                   response = client.models.generate_content(
+    model='gemini-2.0-flash',
+    contents=contents_payload
+)
 
                     st.success("✅ 判定完了")
                     st.markdown(response.text)
