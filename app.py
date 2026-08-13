@@ -3,6 +3,7 @@ from PIL import Image
 from google import genai
 import os
 import tempfile
+import time
 
 st.set_page_config(page_title="フィジカル・スクリーニング AI判定", layout="wide")
 st.title("🏃 フィジカル・スクリーニング AI判定ツール")
@@ -104,16 +105,16 @@ if api_key:
 
                     ### 📸 写真判定（可動域・チェック項目）
                     - **足関節背屈**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ]
-                      - 写真1: [5回平均の数値または状態]
-                      - 写真2: [5回平均の数値または状態]
+                      - 写真1 (ファイル名): [5回平均の数値または状態]
+                      - 写真2 (ファイル名): [5回平均の数値または状態]
                     - **胸椎回旋**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ]
-                      - 写真1: [5回平均の数値または状態]
-                      - 写真2: [5回平均の数値または状態]
+                      - 写真1 (ファイル名): [5回平均の数値または状態]
+                      - 写真2 (ファイル名): [5回平均の数値または状態]
                     - **A/P SLR**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ]
-                      - 写真1: [180 - 平均挙上角度 の計算数値 (例: 105°)]
-                      - 写真2: [180 - 平均挙上角度 の計算数値 (例: 115°)]
+                      - 写真1 (ファイル名): [180 - 平均挙上角度 の計算数値 (例: 105°)]
+                      - 写真2 (ファイル名): [180 - 平均挙上角度 の計算数値 (例: 115°)]
                     - **手書きシート/その他**:
-                      - 写真1: [検出されたエラー項目]
+                      - 写真1 (ファイル名): [検出されたエラー項目]
 
                     ### ⚠️ 要改善項目（まとめ）
                     - [クリアできなかった項目のみを箇条書きで一覧化]
@@ -122,33 +123,45 @@ if api_key:
 
                     contents_payload.insert(0, prompt)
 
-                    # Gemini API 呼び出し
-                    response = client.models.generate_content(
-                        model='gemini-3.5-flash',
-                        contents=contents_payload
-                    )
+                    # Gemini API 呼び出し（503混雑時の自動リトライ処理付き）
+                    response = None
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            response = client.models.generate_content(
+                                model='gemini-3.5-flash',
+                                contents=contents_payload
+                            )
+                            break
+                        except Exception as req_err:
+                            if "503" in str(req_err) and attempt < max_retries - 1:
+                                time.sleep(3 * (attempt + 1))
+                                continue
+                            else:
+                                raise req_err
 
                     st.success("✅ 5回アンサンブル解析・判定完了")
 
-                    # 1. アップロードされた写真の画像一覧プレビュー表示
-                    st.markdown("### 🖼️ アップロード画像一覧")
-                    
-                    def show_image_preview(files_list, title):
+                    st.markdown("---")
+                    st.markdown("### 📊 AI判定結果")
+                    st.markdown(response.text)
+
+                    st.markdown("---")
+                    st.markdown("### 📸 判定対象の写真一覧（プレビュー）")
+
+                    # 写真判定の各項目ごとのカード型表示（画像＋画像名）
+                    def render_photo_section(title, files_list):
                         if files_list:
-                            st.write(f"**{title}**")
+                            st.subheader(title)
                             cols = st.columns(min(len(files_list), 4))
                             for idx, f in enumerate(files_list):
                                 with cols[idx % 4]:
-                                    st.image(f, caption=f"写真{idx+1}: {f.name}", use_container_width=True)
+                                    st.image(f, caption=f"写真{idx+1} ({f.name})", use_container_width=True)
 
-                    show_image_preview(p_ankle, "【足関節背屈】")
-                    show_image_preview(p_aslr, "【A/P SLR】")
-                    show_image_preview(p_thoracic, "【胸椎回旋】")
-                    show_image_preview(p_sheet, "【手書きシート/その他】")
-
-                    st.markdown("---")
-                    st.markdown("### 📊 判定結果")
-                    st.markdown(response.text)
+                    render_photo_section("🦶 足関節背屈", p_ankle)
+                    render_photo_section("🦵 A/P SLR", p_aslr)
+                    render_photo_section("🔄 胸椎回旋", p_thoracic)
+                    render_photo_section("📝 手書きシート / その他", p_sheet)
 
                     # 一時ファイルの削除
                     for tmp_path in temp_files:
@@ -156,4 +169,4 @@ if api_key:
                             os.remove(tmp_path)
 
                 except Exception as e:
-                    st.error(f"判定エラーが発生しました: {e}")
+                    st.error(f"判定エラーが発生しました: {e}\n\n※Google側のAPIサーバーが現在混雑しています。数十秒ほど時間を空けてからもう一度お試しください。")
