@@ -6,7 +6,7 @@ import tempfile
 
 st.set_page_config(page_title="フィジカル・スクリーニング AI判定", layout="wide")
 st.title("🏃 フィジカル・スクリーニング AI判定ツール")
-st.caption("項目ごとに写真・動画を選択して判定します。")
+st.caption("項目ごとに複数枚の写真・動画を選択して判定します。")
 
 # APIキーの設定
 api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
@@ -26,15 +26,15 @@ if api_key:
         v_rear_sq = st.file_uploader("【動画】後ろ手SQ", type=["mp4", "mov", "avi"], key="rear_sq")
 
     st.markdown("---")
-    st.markdown("### 📸 2. 測定写真の選択")
+    st.markdown("### 📸 2. 測定写真の選択（※各項目で複数枚アップロード可能）")
     
     col_p1, col_p2 = st.columns(2)
     with col_p1:
-        p_ankle = st.file_uploader("【写真】足関節背屈", type=["jpg", "jpeg", "png"], key="ankle")
-        p_aslr = st.file_uploader("【写真】A/P SLR", type=["jpg", "jpeg", "png"], key="aslr")
+        p_ankle = st.file_uploader("【写真】足関節背屈", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="ankle")
+        p_aslr = st.file_uploader("【写真】A/P SLR", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="aslr")
     with col_p2:
-        p_thoracic = st.file_uploader("【写真】胸椎回旋", type=["jpg", "jpeg", "png"], key="thoracic")
-        p_sheet = st.file_uploader("【写真】手書き記録シート / その他写真", type=["jpg", "jpeg", "png"], key="sheet")
+        p_thoracic = st.file_uploader("【写真】胸椎回旋", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="thoracic")
+        p_sheet = st.file_uploader("【写真】手書き記録シート / その他写真", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="sheet")
 
     st.markdown("---")
     
@@ -47,9 +47,10 @@ if api_key:
                 try:
                     contents_payload = []
                     temp_files = [] # 一時ファイルのクリーンアップ用
-                    item_mapping_prompt = "以下は選択された項目ごとのファイルデータです。\n\n"
+                    
+                    item_mapping_prompt = "以下は提出されたファイル一覧と対応項目です。\n\n"
 
-                    # 動画ファイルのセットアップ関数
+                    # 動画処理関数（ファイル名を記録）
                     def process_video(uploaded_file, label_name):
                         if uploaded_file:
                             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
@@ -58,52 +59,49 @@ if api_key:
                                 temp_files.append(tmp_path)
                             ref = client.files.upload(file=tmp_path)
                             contents_payload.append(ref)
-                            return f"- 【📹動画】{label_name}: 添付動画を参照\n"
+                            return f"- 【📹動画】{label_name}: [ファイル名: {uploaded_file.name}]\n"
                         return f"- 【📹動画】{label_name}: 未提出\n"
 
-                    # 画像ファイルのセットアップ関数
-                    def process_image(uploaded_file, label_name):
-                        if uploaded_file:
-                            img = Image.open(uploaded_file)
-                            contents_payload.append(img)
-                            return f"- 【📸写真】{label_name}: 添付画像を参照\n"
+                    # 画像処理関数（写真番号とファイル名を記録）
+                    def process_images(uploaded_files, label_name):
+                        if uploaded_files:
+                            file_details = []
+                            for idx, file in enumerate(uploaded_files, start=1):
+                                img = Image.open(file)
+                                contents_payload.append(img)
+                                file_details.append(f"写真{idx}({file.name})")
+                            details_str = ", ".join(file_details)
+                            return f"- 【📸写真】{label_name}: [添付数: {len(uploaded_files)}枚 -> {details_str}]\n"
                         return f"- 【📸写真】{label_name}: 未提出\n"
 
-                    # 各項目を紐づけてペロードに組み立て
+                    # 紐づけ情報の構築
                     item_mapping_prompt += process_video(v_ohsq, "オーバーヘッドSQ (OHSQ)")
                     item_mapping_prompt += process_video(v_rear_sq, "後ろ手SQ")
-                    item_mapping_prompt += process_image(p_ankle, "足関節背屈 (基準: 12cm以上)")
-                    item_mapping_prompt += process_image(p_thoracic, "胸椎回旋 (基準: 50度以上)")
-                    item_mapping_prompt += process_image(p_aslr, "A/P SLR (基準: 70度以上 / 左右差10度未満)")
-                    item_mapping_prompt += process_image(p_sheet, "手書き記録シート・その他チェック項目")
+                    item_mapping_prompt += process_images(p_ankle, "足関節背屈 (基準: 12cm以上)")
+                    item_mapping_prompt += process_images(p_thoracic, "胸椎回旋 (基準: 50度以上)")
+                    item_mapping_prompt += process_images(p_aslr, "A/P SLR (基準: 70度以上 / 左右差10度未満)")
+                    item_mapping_prompt += process_images(p_sheet, "手書き記録シート・その他チェック項目")
 
-                    # 指示用プロンプト
+                    # 指示プロンプト
                     prompt = f"""
                     {item_mapping_prompt}
 
                     【解析指示】
-                    上記の対応関係に基づいて画像を解析し、スクリーニングの良否判定のみを行ってください。アドバイスや雑感は不要です。
-                    未提出の項目がある場合は「未提出」と表記してください。
-
-                    【判定基準】
-                    1. **動画（OHSQ / 後ろ手SQ）**:
-                       - 上体とスネが平行か、大腿が水平ライン未満になっていないか、動作の不自然なブレがないかを判定。
-                    2. **写真（足関節背屈 / 胸椎回旋 / A/P SLR）**:
-                       - それぞれの測定値または姿勢から基準クリア（⭕ 正常）か不合格（❌ 要改善）かを判定。
-                    3. **手書き記録シート**:
-                       - 数値やチェックボックスの内容を読み取って判定を反映させてください。
+                    上記の対応関係に基づいて画像を解析し、スクリーニングの良否判定のみを行ってください。
+                    どのファイル（写真1, 写真2, または動画ファイル名など）に基づいて判定したかを各判定項目の横に必ず明記してください。
+                    アドバイスや雑感は不要です。未提出の項目がある場合は「未提出」と表記してください。
 
                     【出力フォーマット】
                     ---
                     ### 📹 動画判定（スクワット項目）
-                    - **オーバーヘッドSQ**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [理由]
-                    - **後ろ手SQ**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [理由]
+                    - **オーバーヘッドSQ**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - (対象: [動画ファイル名]) [理由]
+                    - **後ろ手SQ**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - (対象: [動画ファイル名]) [理由]
 
                     ### 📸 写真判定（可動域・チェック項目）
-                    - **足関節背屈**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [数値または状態]
-                    - **胸椎回旋**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [数値または状態]
-                    - **A/P SLR**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [数値または状態]
-                    - **手書きシート/その他**: [検出されたエラー項目]
+                    - **足関節背屈**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - (対象: [写真1(ファイル名) 等]) [数値または状態]
+                    - **胸椎回旋**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - (対象: [写真1(ファイル名) 等]) [数値または状態]
+                    - **A/P SLR**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - (対象: [写真1(ファイル名) 等]) [数値または状態]
+                    - **手書きシート/その他**: (対象: [写真1(ファイル名) 等]) [検出されたエラー項目]
 
                     ### ⚠️ 要改善項目（まとめ）
                     - [クリアできなかった項目のみを箇条書きで一覧化]
@@ -112,9 +110,9 @@ if api_key:
 
                     contents_payload.insert(0, prompt)
 
-                    # Gemini API 呼び出し（最新の gemini-2.0-flash に指定）
+                    # Gemini API 呼び出し
                     response = client.models.generate_content(
-                        model='gemini-3.5-flash',
+                        model='gemini-2.5-flash',
                         contents=contents_payload
                     )
 
