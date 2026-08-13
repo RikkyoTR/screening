@@ -114,7 +114,7 @@ if api_key:
 
                     # Gemini API 呼び出し（最新の gemini-2.0-flash に指定）
                     response = client.models.generate_content(
-                        model='gemini-2.0-flash',
+                        model='gemini-3.5-flash',
                         contents=contents_payload
                     )
 
