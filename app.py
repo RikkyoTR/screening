@@ -40,7 +40,6 @@ if api_key:
     
     # 判定実行ボタン
     if st.button("🚀 この内容でAI判定を実行する", type="primary"):
-        # いずれのファイルもアップロードされていない場合のチェック
         if not any([v_ohsq, v_rear_sq, p_ankle, p_thoracic, p_aslr, p_sheet]):
             st.error("⚠️ 少なくとも1つの動画または写真をアップロードしてください。")
         else:
@@ -113,11 +112,11 @@ if api_key:
 
                     contents_payload.insert(0, prompt)
 
-                    # Gemini API 呼び出し
-                   response = client.models.generate_content(
-    model='gemini-2.0-flash',
-    contents=contents_payload
-)
+                    # Gemini API 呼び出し（最新の gemini-2.0-flash に指定）
+                    response = client.models.generate_content(
+                        model='gemini-2.0-flash',
+                        contents=contents_payload
+                    )
 
                     st.success("✅ 判定完了")
                     st.markdown(response.text)
