@@ -6,7 +6,7 @@ import tempfile
 
 st.set_page_config(page_title="フィジカル・スクリーニング AI判定", layout="wide")
 st.title("🏃 フィジカル・スクリーニング AI判定ツール")
-st.caption("項目ごとに複数枚の写真・動画を選択して判定します。")
+st.caption("項目ごとに複数枚の写真・動画を選択して判定します。（高精度化のため5回アンサンブル解析を実行します）")
 
 # APIキーの設定
 api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
@@ -39,18 +39,18 @@ if api_key:
     st.markdown("---")
     
     # 判定実行ボタン
-    if st.button("🚀 この内容でAI判定を実行する", type="primary"):
+    if st.button("🚀 この内容でAI判定を実行する（5回平均解析）", type="primary"):
         if not any([v_ohsq, v_rear_sq, p_ankle, p_thoracic, p_aslr, p_sheet]):
             st.error("⚠️ 少なくとも1つの動画または写真をアップロードしてください。")
         else:
-            with st.spinner("AIが指定された項目別に解析中..."):
+            with st.spinner("AIがブレを抑えるため5回の試行測定を行い、平均値を算出中...（15〜30秒ほどかかります）"):
                 try:
                     contents_payload = []
                     temp_files = [] # 一時ファイルのクリーンアップ用
                     
                     item_mapping_prompt = "以下は提出されたファイル一覧と対応項目です。\n\n"
 
-                    # 動画処理関数（ファイル名を記録）
+                    # 動画処理関数
                     def process_video(uploaded_file, label_name):
                         if uploaded_file:
                             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
@@ -62,7 +62,7 @@ if api_key:
                             return f"- 【📹動画】{label_name}: [ファイル名: {uploaded_file.name}]\n"
                         return f"- 【📹動画】{label_name}: 未提出\n"
 
-                    # 画像処理関数（写真番号とファイル名を記録）
+                    # 画像処理関数
                     def process_images(uploaded_files, label_name):
                         if uploaded_files:
                             file_details = []
@@ -86,35 +86,34 @@ if api_key:
                     prompt = f"""
                     {item_mapping_prompt}
 
-                    【解析指示】
-                    上記の対応関係に基づいて画像を解析し、スクリーニングの良否判定のみを行ってください。
-                    アドバイスや雑感は不要です。未提出の項目がある場合は「未提出」と表記してください。
+                    【高精度解析指示】
+                    画像・動画を分析するにあたり、測定誤差や判定のブレを防ぐため、**各写真・動画に対して全項目5回の内部測定を実施し、その平均値を最終判定値として採用してください**。
 
                     ※重要フォーマット＆角度の計算・変換規則※
                     - 写真判定の各項目について、**複数枚の写真がある場合は写真1枚ごとにインデント（箇条書きの配下）で段落分けして表示**してください。
                     - **A/P SLR** の測定角度について:
-                      1. まず「股関節（大転子付近）」と「挙上している側の外くるぶし（外果）」を結んだ直線と「水平線」とのなす【足側の挙上角度】（例: 75°）を測定します。
-                      2. その後、**【180° − 測定された挙上角度】** の計算を行ってください。（例: 挙上角度が75°の場合は 180 - 75 = 105°）
-                      3. 出力時には理由や解説文は一切書かず、**【180° − 測定角度】の計算結果数値のみ（例: 105°）**を表示してください。
+                      1. 「股関節（大転子付近）」と「挙上している側の外くるぶし（外果）」を結んだ直線と「水平線」とのなす【足側の挙上角度】（例: 75°）を5回試行測定し、平均値を求めてください。
+                      2. その後、**【180° − (5回測定した平均挙上角度)】** の計算を行ってください。
+                      3. 出力時には理由や解説文は一切書かず、**【180° − 平均角度】の計算結果数値のみ（例: 105°）**を表示してください。
 
                     【出力フォーマット例】
                     ---
                     ### 📹 動画判定（スクワット項目）
-                    - **オーバーヘッドSQ**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - (対象: [動画ファイル名]) [理由]
-                    - **後ろ手SQ**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - (対象: [動画ファイル名]) [理由]
+                    - **オーバーヘッドSQ**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [判定理由]
+                    - **後ろ手SQ**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [判定理由]
 
                     ### 📸 写真判定（可動域・チェック項目）
                     - **足関節背屈**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ]
-                      - 写真1 (ファイル名): [数値または状態]
-                      - 写真2 (ファイル名): [数値または状態]
+                      - 写真1: [5回平均の数値または状態]
+                      - 写真2: [5回平均の数値または状態]
                     - **胸椎回旋**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ]
-                      - 写真1 (ファイル名): [数値または状態]
-                      - 写真2 (ファイル名): [数値または状態]
+                      - 写真1: [5回平均の数値または状態]
+                      - 写真2: [5回平均の数値または状態]
                     - **A/P SLR**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ]
-                      - 写真1 (ファイル名): [180 - 挙上角度 の計算数値 (例: 105°)]
-                      - 写真2 (ファイル名): [180 - 挙上角度 の計算数値 (例: 115°)]
+                      - 写真1: [180 - 平均挙上角度 の計算数値 (例: 105°)]
+                      - 写真2: [180 - 平均挙上角度 の計算数値 (例: 115°)]
                     - **手書きシート/その他**:
-                      - 写真1 (ファイル名): [検出されたエラー項目]
+                      - 写真1: [検出されたエラー項目]
 
                     ### ⚠️ 要改善項目（まとめ）
                     - [クリアできなかった項目のみを箇条書きで一覧化]
@@ -129,7 +128,26 @@ if api_key:
                         contents=contents_payload
                     )
 
-                    st.success("✅ 判定完了")
+                    st.success("✅ 5回アンサンブル解析・判定完了")
+
+                    # 1. アップロードされた写真の画像一覧プレビュー表示
+                    st.markdown("### 🖼️ アップロード画像一覧")
+                    
+                    def show_image_preview(files_list, title):
+                        if files_list:
+                            st.write(f"**{title}**")
+                            cols = st.columns(min(len(files_list), 4))
+                            for idx, f in enumerate(files_list):
+                                with cols[idx % 4]:
+                                    st.image(f, caption=f"写真{idx+1}: {f.name}", use_container_width=True)
+
+                    show_image_preview(p_ankle, "【足関節背屈】")
+                    show_image_preview(p_aslr, "【A/P SLR】")
+                    show_image_preview(p_thoracic, "【胸椎回旋】")
+                    show_image_preview(p_sheet, "【手書きシート/その他】")
+
+                    st.markdown("---")
+                    st.markdown("### 📊 判定結果")
                     st.markdown(response.text)
 
                     # 一時ファイルの削除
