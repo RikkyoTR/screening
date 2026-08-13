@@ -4,10 +4,9 @@ from google import genai
 import os
 import tempfile
 
-# ページ基本設定
 st.set_page_config(page_title="フィジカル・スクリーニング AI判定", layout="wide")
-st.title("🏃 フィジカル・スクリーニング 簡易AI判定ツール")
-st.caption("動画（OHSQ・後ろ手SQ）と 写真（その他全項目）を選択して一括判定します。")
+st.title("🏃 フィジカル・スクリーニング AI判定ツール")
+st.caption("項目ごとに写真・動画を選択して判定します。")
 
 # APIキーの設定
 api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
@@ -19,89 +18,99 @@ if not api_key:
 if api_key:
     client = genai.Client(api_key=api_key)
 
-    # メディアのアップロードエリア
-    uploaded_files = st.file_uploader(
-        "判定する写真（可動域・シート等）と 動画（OHSQ・後ろ手SQ）をすべて選択してください",
-        type=["jpg", "jpeg", "png", "mp4", "mov", "avi"],
-        accept_multiple_files=True
-    )
+    st.markdown("### 📹 1. 動作動画の選択")
+    col_v1, col_v2 = st.columns(2)
+    with col_v1:
+        v_ohsq = st.file_uploader("【動画】オーバーヘッドSQ (OHSQ)", type=["mp4", "mov", "avi"], key="ohsq")
+    with col_v2:
+        v_rear_sq = st.file_uploader("【動画】後ろ手SQ", type=["mp4", "mov", "avi"], key="rear_sq")
 
-    if uploaded_files:
-        st.write(f"📁 選択中のファイル: {len(uploaded_files)} 件")
-        
-        # プレビュー表示
-        cols = st.columns(min(len(uploaded_files), 4))
-        for idx, file in enumerate(uploaded_files):
-            with cols[idx % 4]:
-                if file.type.startswith("image"):
-                    st.image(Image.open(file), caption=f"📸 {file.name}", use_container_width=True)
-                elif file.type.startswith("video"):
-                    st.video(file)
-                    st.caption(f"📹 {file.name}")
+    st.markdown("---")
+    st.markdown("### 📸 2. 測定写真の選択")
+    
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        p_ankle = st.file_uploader("【写真】足関節背屈", type=["jpg", "jpeg", "png"], key="ankle")
+        p_aslr = st.file_uploader("【写真】A/P SLR", type=["jpg", "jpeg", "png"], key="aslr")
+    with col_p2:
+        p_thoracic = st.file_uploader("【写真】胸椎回旋", type=["jpg", "jpeg", "png"], key="thoracic")
+        p_sheet = st.file_uploader("【写真】手書き記録シート / その他写真", type=["jpg", "jpeg", "png"], key="sheet")
 
-        st.markdown("---")
-        
-        # 判定実行ボタン
-        if st.button("🚀 AI判定を実行する", type="primary"):
-            with st.spinner("AIが映像・画像を解析中..."):
+    st.markdown("---")
+    
+    # 判定実行ボタン
+    if st.button("🚀 この内容でAI判定を実行する", type="primary"):
+        # いずれのファイルもアップロードされていない場合のチェック
+        if not any([v_ohsq, v_rear_sq, p_ankle, p_thoracic, p_aslr, p_sheet]):
+            st.error("⚠️ 少なくとも1つの動画または写真をアップロードしてください。")
+        else:
+            with st.spinner("AIが指定された項目別に解析中..."):
                 try:
                     contents_payload = []
                     temp_files = [] # 一時ファイルのクリーンアップ用
+                    item_mapping_prompt = "以下は選択された項目ごとのファイルデータです。\n\n"
 
-                    # ファイルのロード処理
-                    for file in uploaded_files:
-                        if file.type.startswith("image"):
-                            img = Image.open(file)
-                            contents_payload.append(img)
-                        
-                        elif file.type.startswith("video"):
+                    # 動画ファイルのセットアップ関数
+                    def process_video(uploaded_file, label_name):
+                        if uploaded_file:
                             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
-                                tmp_file.write(file.read())
-                                tmp_file_path = tmp_file.name
-                                temp_files.append(tmp_file_path)
+                                tmp_file.write(uploaded_file.read())
+                                tmp_path = tmp_file.name
+                                temp_files.append(tmp_path)
+                            ref = client.files.upload(file=tmp_path)
+                            contents_payload.append(ref)
+                            return f"- 【📹動画】{label_name}: 添付動画を参照\n"
+                        return f"- 【📹動画】{label_name}: 未提出\n"
 
-                            # Files API 経由で動画を送信
-                            video_file_ref = client.files.upload(file=tmp_file_path)
-                            contents_payload.append(video_file_ref)
+                    # 画像ファイルのセットアップ関数
+                    def process_image(uploaded_file, label_name):
+                        if uploaded_file:
+                            img = Image.open(uploaded_file)
+                            contents_payload.append(img)
+                            return f"- 【📸写真】{label_name}: 添付画像を参照\n"
+                        return f"- 【📸写真】{label_name}: 未提出\n"
 
-                    # 判定ロジック専用プロンプト（アドバイスは出力しない）
-                    prompt = """
-                    添付された【写真】および【動画】を解析し、スクリーニング結果の良否判定のみを行ってください。アドバイスや解説などの文章は一切不要です。
+                    # 各項目を紐づけてペロードに組み立て
+                    item_mapping_prompt += process_video(v_ohsq, "オーバーヘッドSQ (OHSQ)")
+                    item_mapping_prompt += process_video(v_rear_sq, "後ろ手SQ")
+                    item_mapping_prompt += process_image(p_ankle, "足関節背屈 (基準: 12cm以上)")
+                    item_mapping_prompt += process_image(p_thoracic, "胸椎回旋 (基準: 50度以上)")
+                    item_mapping_prompt += process_image(p_aslr, "A/P SLR (基準: 70度以上 / 左右差10度未満)")
+                    item_mapping_prompt += process_image(p_sheet, "手書き記録シート・その他チェック項目")
 
-                    【判定ルールと役割分担】
+                    # 指示用プロンプト
+                    prompt = f"""
+                    {item_mapping_prompt}
 
-                    1. **📹 動画で判定する項目（動作・フォーム解析）**
-                       - **オーバーヘッドSQ (OHSQ)**:
-                         * 上体がスネと平行を保てているか？
-                         * 大腿が水平ラインより下がっているか？
-                         * バーが足の上に保持できているか？
-                       - **後ろ手SQ**:
-                         * 動作のブレ、下降時の不自然な動き、可動域制限の有無
+                    【解析指示】
+                    上記の対応関係に基づいて画像を解析し、スクリーニングの良否判定のみを行ってください。アドバイスや雑感は不要です。
+                    未提出の項目がある場合は「未提出」と表記してください。
 
-                    2. **📸 写真で判定する項目（静止姿勢・シート解析）**
-                       - **足関節背屈**: 壁との距離（12cm未満は要改善）
-                       - **胸椎回旋**: 角度（50°未満は要改善）
-                       - **A/P SLR**: 角度（70°未満）および 左右差（10°以上は要改善）
-                       - **その他（立位体前屈/後屈、ヒップフレクサー、Yバランスなど）**: エラーの有無
-                       - ※記録用紙の写真が含まれる場合は、数値を直接読み取って判定してください。
+                    【判定基準】
+                    1. **動画（OHSQ / 後ろ手SQ）**:
+                       - 上体とスネが平行か、大腿が水平ライン未満になっていないか、動作の不自然なブレがないかを判定。
+                    2. **写真（足関節背屈 / 胸椎回旋 / A/P SLR）**:
+                       - それぞれの測定値または姿勢から基準クリア（⭕ 正常）か不合格（❌ 要改善）かを判定。
+                    3. **手書き記録シート**:
+                       - 数値やチェックボックスの内容を読み取って判定を反映させてください。
 
                     【出力フォーマット】
                     ---
                     ### 📹 動画判定（スクワット項目）
-                    - **オーバーヘッドSQ**: [ ⭕ 正常 / ❌ 要改善 ] - [詳細・理由]
-                    - **後ろ手SQ**: [ ⭕ 正常 / ❌ 要改善 ] - [詳細・理由]
+                    - **オーバーヘッドSQ**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [理由]
+                    - **後ろ手SQ**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [理由]
 
                     ### 📸 写真判定（可動域・チェック項目）
-                    - **足関節背屈**: [ ⭕ 正常 / ❌ 要改善 ] - [数値または状態]
-                    - **胸椎回旋**: [ ⭕ 正常 / ❌ 要改善 ] - [数値または状態]
-                    - **A/P SLR**: [ ⭕ 正常 / ❌ 要改善 ] - [数値または状態]
-                    - **その他検出項目**: [エラーがある項目のみ箇条書き]
+                    - **足関節背屈**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [数値または状態]
+                    - **胸椎回旋**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [数値または状態]
+                    - **A/P SLR**: [ ⭕ 正常 / ❌ 要改善 / 未提出 ] - [数値または状態]
+                    - **手書きシート/その他**: [検出されたエラー項目]
 
                     ### ⚠️ 要改善項目（まとめ）
                     - [クリアできなかった項目のみを箇条書きで一覧化]
                     ---
                     """
-                    
+
                     contents_payload.insert(0, prompt)
 
                     # Gemini API 呼び出し
@@ -113,7 +122,7 @@ if api_key:
                     st.success("✅ 判定完了")
                     st.markdown(response.text)
 
-                    # 後処理（アップロード動画の削除）
+                    # 一時ファイルの削除
                     for tmp_path in temp_files:
                         if os.path.exists(tmp_path):
                             os.remove(tmp_path)
